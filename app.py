@@ -2,13 +2,7 @@
 =============================================================
   app.py — Gmail → Google Sheets / Excel Automation UI
 =============================================================
-Run with:  streamlit run app.py  (port is set in .streamlit/config.toml)
-
-Workflow:
-  1. Select destination (Google Sheets or Excel)
-  2. Click "Run Automation"
-  3. The app fetches unread Gmail messages, parses them with
-     Gemini AI, and appends structured rows to the chosen target.
+Run with:  streamlit run app.py
 """
 
 import logging
@@ -18,8 +12,41 @@ from io import StringIO
 import streamlit as st
 import pandas as pd
 
-# Local modules — all credentials come from config.py / Replit Secrets
-import config
+# ---------------------------------------------------------------------------
+# Streamlit Secrets Wrapper (Replaces config.py)
+# ---------------------------------------------------------------------------
+def get_secret(key: str, default: str = "") -> str:
+    """Safely fetch keys from Streamlit Cloud Secrets."""
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+# Load configuration directly from Streamlit Secrets
+GEMINI_API_KEY = get_secret("GEMINI_API_KEY")
+GMAIL_USER_EMAIL = get_secret("GMAIL_USER_EMAIL")
+GMAIL_APP_PASSWORD = get_secret("GMAIL_APP_PASSWORD")
+SERVICE_ACCOUNT_INFO = get_secret("GOOGLE_SERVICE_ACCOUNT_JSON")
+SPREADSHEET_ID = get_secret("SPREADSHEET_ID")
+EXCEL_FILE_PATH = get_secret("EXCEL_FILE_PATH", "output.xlsx")
+GMAIL_MAX_EMAILS = int(get_secret("GMAIL_MAX_EMAILS", "10"))
+
+def validate_config(destination: str) -> list[str]:
+    """Validate required secrets based on the chosen destination."""
+    errors = []
+    if not GEMINI_API_KEY:
+        errors.append("❌ GEMINI_API_KEY is missing in Secrets.")
+    if not GMAIL_USER_EMAIL:
+        errors.append("❌ GMAIL_USER_EMAIL is missing in Secrets.")
+    if not GMAIL_APP_PASSWORD:
+        errors.append("❌ GMAIL_APP_PASSWORD is missing in Secrets.")
+
+    if destination == "Google Sheets":
+        if not SPREADSHEET_ID:
+            errors.append("❌ SPREADSHEET_ID is missing in Secrets.")
+    return errors
+
+# Local modules
 from gmail_client import fetch_unread_emails
 from ai_parser import parse_emails
 from sheets_client import append_rows_to_sheet
@@ -36,7 +63,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# Logging — captured to a StringIO buffer so we can display it in the UI
+# Logging
 # ---------------------------------------------------------------------------
 log_buffer = StringIO()
 logging.basicConfig(
@@ -46,7 +73,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-# Collect per-run messages for the live log widget
 if "run_logs" not in st.session_state:
     st.session_state.run_logs: list[str] = []
 
@@ -54,7 +80,7 @@ if "parsed_data" not in st.session_state:
     st.session_state.parsed_data: list[dict] = []
 
 if "last_run_status" not in st.session_state:
-    st.session_state.last_run_status: str | None = None  # "success" | "error" | None
+    st.session_state.last_run_status: str | None = None
 
 
 def _log(msg: str) -> None:
@@ -67,7 +93,7 @@ def _log(msg: str) -> None:
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.title("⚙️ Configuration")
-    st.markdown("All credentials come from **Replit Secrets**. See the guide below.")
+    st.markdown("All credentials come from **Streamlit Secrets**.")
 
     st.divider()
     st.subheader("Secret Status")
@@ -76,55 +102,16 @@ with st.sidebar:
         icon = "✅" if value else "❌"
         st.write(f"{icon} `{label}`")
 
-    _status("GEMINI_API_KEY", config.GEMINI_API_KEY)
-    _status("GMAIL_USER_EMAIL", config.GMAIL_USER_EMAIL)
-    _status("GMAIL_APP_PASSWORD", config.GMAIL_APP_PASSWORD)
-    _status("GOOGLE_SERVICE_ACCOUNT_JSON", "set" if config.SERVICE_ACCOUNT_INFO else "")
-    _status("SPREADSHEET_ID", config.SPREADSHEET_ID)
-    _status("EXCEL_FILE_PATH", config.EXCEL_FILE_PATH)
+    _status("GEMINI_API_KEY", GEMINI_API_KEY)
+    _status("GMAIL_USER_EMAIL", GMAIL_USER_EMAIL)
+    _status("GMAIL_APP_PASSWORD", GMAIL_APP_PASSWORD)
+    _status("GOOGLE_SERVICE_ACCOUNT_JSON", "set" if SERVICE_ACCOUNT_INFO else "")
+    _status("SPREADSHEET_ID", SPREADSHEET_ID)
+    _status("EXCEL_FILE_PATH", EXCEL_FILE_PATH)
 
     st.divider()
     st.subheader("Gmail Settings")
-    st.caption(f"Fetching up to **{config.GMAIL_MAX_EMAILS}** unread emails.")
-    st.caption("Set `GMAIL_MAX_EMAILS` to change this limit.")
-
-    st.divider()
-    with st.expander("📖 Setup Guide", expanded=False):
-        st.markdown(
-            """
-### Where to paste your keys
-
-Open **Replit → Tools → Secrets** and add:
-
-| Secret Name | What to paste |
-|---|---|
-| `GEMINI_API_KEY` | Your Google Gemini API key |
-| `GMAIL_USER_EMAIL` | Your full Gmail address |
-| `GMAIL_APP_PASSWORD` | A 16-char Gmail App Password |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | Full JSON of your service account key |
-| `SPREADSHEET_ID` | The ID from your Google Sheet URL |
-| `EXCEL_FILE_PATH` | *(optional)* e.g. `output.xlsx` |
-
----
-
-### Gmail App Password
-1. Go to [myaccount.google.com](https://myaccount.google.com) → **Security**
-2. Enable **2-Step Verification**
-3. Search for **App passwords**
-4. Create one → label it "Replit"
-5. Paste the 16-character code into `GMAIL_APP_PASSWORD`
-
----
-
-### Google Service Account (for Sheets)
-1. [console.cloud.google.com](https://console.cloud.google.com) → New Project
-2. Enable **Google Sheets API** + **Google Drive API**
-3. **IAM & Admin → Service Accounts** → Create
-4. Download the JSON key
-5. Paste the **entire JSON** into `GOOGLE_SERVICE_ACCOUNT_JSON`
-6. **Share your Google Sheet** with the `client_email` from that JSON
-            """
-        )
+    st.caption(f"Fetching up to **{GMAIL_MAX_EMAILS}** unread emails.")
 
 # ---------------------------------------------------------------------------
 # Main content
@@ -137,7 +124,7 @@ st.markdown(
 
 st.divider()
 
-# ── Destination selector ──────────────────────────────────────────────────
+# Destination selector
 col_left, col_right = st.columns([2, 3])
 
 with col_left:
@@ -169,7 +156,7 @@ with col_left:
         help="Fetch unread emails, parse with Gemini, and write to the chosen destination.",
     )
 
-# ── Right column: live preview / results ─────────────────────────────────
+# Right column: preview
 with col_right:
     if st.session_state.last_run_status == "success" and st.session_state.parsed_data:
         st.subheader("📊 Last Run — Parsed Data Preview")
@@ -186,7 +173,7 @@ with col_right:
             "Make sure all required Secrets are set (check the sidebar ✅)."
         )
 
-# ── Execution log ─────────────────────────────────────────────────────────
+# Execution log
 st.divider()
 st.subheader("🪵 Execution Log")
 log_placeholder = st.empty()
@@ -198,22 +185,20 @@ if st.session_state.run_logs:
 # Run automation logic
 # ---------------------------------------------------------------------------
 if run_button:
-    # Reset state for a fresh run
     st.session_state.run_logs = []
     st.session_state.parsed_data = []
     st.session_state.last_run_status = None
 
-    # Validate config before doing any network work
-    errors = config.validate_config(destination)
+    errors = validate_config(destination)
     if errors:
         for err in errors:
             _log(err)
-        _log("⛔ Please fix the above issues in Replit Secrets and try again.")
+        _log("⛔ Please fix the above issues in Streamlit Secrets and try again.")
         log_placeholder.code("\n".join(st.session_state.run_logs), language="")
         st.session_state.last_run_status = "error"
         st.rerun()
 
-    # ── Step 1: Fetch emails ──────────────────────────────────────────────
+    # Step 1: Fetch emails
     try:
         _log("=" * 55)
         _log("STEP 1 — Fetching unread emails from Gmail…")
@@ -235,7 +220,7 @@ if run_button:
         st.session_state.last_run_status = "error"
         st.rerun()
 
-    # ── Step 2: Parse with Gemini ─────────────────────────────────────────
+    # Step 2: Parse with Gemini
     try:
         _log("")
         _log("=" * 55)
@@ -253,7 +238,7 @@ if run_button:
         st.session_state.last_run_status = "error"
         st.rerun()
 
-    # ── Step 3: Write to destination ──────────────────────────────────────
+    # Step 3: Write to destination
     try:
         _log("")
         _log("=" * 55)
@@ -278,11 +263,5 @@ if run_button:
 
     st.rerun()
 
-# ---------------------------------------------------------------------------
-# Footer
-# ---------------------------------------------------------------------------
 st.divider()
-st.caption(
-    "Gmail Data Entry Automation · Credentials managed via Replit Secrets · "
-    "Powered by Gemini AI, gspread, and openpyxl"
-        )
+st.caption("Gmail Data Entry Automation · Powered by Gemini AI")
