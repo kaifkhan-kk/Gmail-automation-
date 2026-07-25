@@ -10,7 +10,7 @@ def parse_emails(emails, log_fn=print):
         raise ValueError("GEMINI_API_KEY Secrets में नहीं मिली!")
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-2.5-flash")
 
     parsed_results = []
     log_fn(f"Gemini AI से {len(emails)} ईमेल्स का डेटा प्रोसेस किया जा रहा है...")
